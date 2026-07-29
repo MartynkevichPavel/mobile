@@ -5,6 +5,10 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+# Для десктоп-режима
+import tkinter as tk
+from tkinter import filedialog
+
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 from config import MODEL_PATH
@@ -64,11 +68,7 @@ def main(page: ft.Page):
     progress_container = ft.Column()
 
     def show_snackbar(message: str, action: str = "OK"):
-        """Показывает уведомление"""
-        page.snack_bar = ft.SnackBar(
-            content=ft.Text(message),
-            action=action,
-        )
+        page.snack_bar = ft.SnackBar(content=ft.Text(message), action=action)
         page.snack_bar.open = True
         page.update()
 
@@ -87,16 +87,35 @@ def main(page: ft.Page):
             model_status.color = ft.Colors.RED
         page.update()
 
-    def on_files_selected(data):
-        """Обработка файлов, выбранных через JavaScript"""
-        print(f"📁 Получены файлы: {data}")
-        if data and len(data) > 0:
-            show_snackbar(f"Выбрано файлов: {len(data)}")
-        else:
-            show_snackbar("Выбор отменен")
+    # ===== ВЫБОР ФАЙЛОВ: ДЕСКТОП-РЕЖИМ (tkinter) =====
+    def pick_files_desktop(e):
+        """Открывает диалог выбора файлов через tkinter"""
+        try:
+            root = tk.Tk()
+            root.withdraw()  # Скрываем главное окно
+            root.attributes('-topmost', True)  # Окно поверх всех
+            
+            files = filedialog.askopenfilenames(
+                title="Выберите фотографии",
+                filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.webp")]
+            )
+            root.destroy()
+            
+            if files:
+                current_images.clear()
+                for f in files:
+                    current_images.append(f)
+                selected_info.value = f"Выбрано: {len(current_images)} файлов"
+                page.update()
+                show_snackbar(f"Выбрано {len(current_images)} файлов")
+            else:
+                show_snackbar("Выбор отменен")
+        except Exception as e:
+            print(f"❌ Ошибка tkinter: {e}")
+            show_snackbar(f"Ошибка выбора файлов: {e}")
 
+    # ===== ВЕБ-РЕЖИМ: ВЫБОР ФАЙЛОВ ЧЕРЕЗ JAVASCRIPT =====
     def pick_files_web(e):
-        """Открывает диалог выбора файлов через JavaScript"""
         js_code = """
         var input = document.createElement('input');
         input.type = 'file';
@@ -108,23 +127,27 @@ def main(page: ft.Page):
             for (var i = 0; i < files.length; i++) {
                 result.push(files[i].name);
             }
-            window._flet_file_picker_result = result;
             var event = new CustomEvent('file-picked', { detail: result });
             document.dispatchEvent(event);
         };
         input.click();
         """
-        
-        # Пробуем разные варианты JavaScript
-        if hasattr(page.window, 'evaluate_js'):
+        try:
             page.window.evaluate_js(js_code)
-        elif hasattr(page.window, 'run_javascript'):
-            page.window.run_javascript(js_code)
-        else:
-            show_snackbar("Выбор файлов не доступен в этом режиме")
-        
-        page.on_js_message = on_files_selected
+        except AttributeError:
+            show_snackbar("Веб-режим не поддерживается. Используйте десктоп-режим.")
+            print("⚠️ page.window.evaluate_js не доступен")
 
+    def on_files_selected(data):
+        print(f"📁 Получены файлы: {data}")
+        if data and len(data) > 0:
+            show_snackbar(f"Выбрано файлов: {len(data)}")
+            selected_info.value = f"Выбрано: {len(data)} файлов"
+            page.update()
+        else:
+            show_snackbar("Выбор отменен")
+
+    # ===== АНАЛИЗ ИЗОБРАЖЕНИЙ =====
     def analyze_images():
         if not analyzer:
             show_snackbar("❌ Модель не загружена!")
@@ -212,10 +235,19 @@ def main(page: ft.Page):
 
     # ===================== КНОПКИ =====================
 
+    # Выбираем режим в зависимости от окружения
+    def pick_files(e):
+        if os.name == 'nt':  # Windows
+            pick_files_desktop(e)
+        elif sys.platform == 'linux':
+            pick_files_desktop(e)  # Используем tkinter
+        else:
+            pick_files_web(e)  # Fallback
+
     pick_btn = ft.Button(
         "📁 Выбрать фото",
         icon=ft.Icons.PHOTO_LIBRARY,
-        on_click=pick_files_web,
+        on_click=pick_files,
     )
 
     load_btn = ft.Button(
@@ -252,4 +284,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.run(main, view=ft.AppView.WEB_BROWSER)
+    ft.run(main, view=ft.AppView.FLET_APP)

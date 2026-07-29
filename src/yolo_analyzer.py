@@ -29,9 +29,17 @@ class YOLOAnalyzer:
         try:
             img = Image.open(image_path).convert('RGB')
             img_resized = img.resize((INPUT_SIZE, INPUT_SIZE))
-            input_data = np.array(img_resized, dtype=np.uint8)
+            
+            # 1. Преобразуем в numpy array (FLOAT32!)
+            input_data = np.array(img_resized, dtype=np.float32)
+            
+            # 2. Нормализуем (делим на 255.0)
+            input_data = input_data / 255.0
+            
+            # 3. Добавляем размерность батча
             input_data = np.expand_dims(input_data, axis=0)
-
+            
+            # 4. Выполняем инференс
             self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
             self.interpreter.invoke()
 
