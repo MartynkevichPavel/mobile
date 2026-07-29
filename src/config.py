@@ -10,7 +10,7 @@ MODEL_PATH = os.path.join(ASSETS_DIR, "vehicle-detector-yolov8n-int8.tflite")
 DB_PATH = os.path.join(BASE_DIR, "photo_db")
 
 # ===== НАСТРОЙКИ YOLO =====
-CONF_THRESHOLD = 0.3
+CONF_THRESHOLD = 0.1
 IOU_THRESHOLD = 0.5
 INPUT_SIZE = 320
 

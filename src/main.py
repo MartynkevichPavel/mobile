@@ -2,12 +2,9 @@ import flet as ft
 import os
 import sys
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import threading
-
-# Для десктоп-режима
-import tkinter as tk
-from tkinter import filedialog
+import time
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -15,19 +12,39 @@ from config import MODEL_PATH
 from yolo_analyzer import YOLOAnalyzer
 from database import PhotoDatabase
 from utils import format_tags
+from gallery_scanner import GalleryScanner
 
 
 analysis_results = {}
 current_images = []
+is_analyzing = False
+analysis_complete = False
 
 
 def analyze_single_image(image_path: str, analyzer_instance):
+    """Анализирует одно изображение (без сигналов)"""
     try:
+        print(f"📸 Обработка: {os.path.basename(image_path)}")
+        
+        if not os.path.exists(image_path):
+            return {
+                'path': image_path,
+                'tags': [],
+                'detections': [],
+                'filename': os.path.basename(image_path),
+                'success': False,
+                'error': 'File not found'
+            }
+        
+        # Просто выполняем анализ (без сигналов)
         detections = analyzer_instance.analyze(image_path)
         tags = [d['class'] for d in detections if d['confidence'] > 0.3]
         
-        db = PhotoDatabase()
-        db.add_photo(hash(image_path), image_path, tags)
+        try:
+            db = PhotoDatabase()
+            db.add_photo(hash(image_path), image_path, tags)
+        except Exception as e:
+            print(f"   ⚠️ БД: {e}")
         
         return {
             'path': image_path,
@@ -38,6 +55,7 @@ def analyze_single_image(image_path: str, analyzer_instance):
             'error': None
         }
     except Exception as e:
+        print(f"❌ Ошибка {os.path.basename(image_path)}: {e}")
         return {
             'path': image_path,
             'tags': [],
@@ -49,23 +67,39 @@ def analyze_single_image(image_path: str, analyzer_instance):
 
 
 def main(page: ft.Page):
-    global current_images, analysis_results
+    global current_images, analysis_results, is_analyzing, analysis_complete
     
     page.title = "Photo Analyzer"
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 20
     page.scroll = ft.ScrollMode.AUTO
 
-    executor = ThreadPoolExecutor(max_workers=4)
+    executor = ThreadPoolExecutor(max_workers=2)
     
     model_path = MODEL_PATH
     analyzer = None
+    scanner = GalleryScanner()
+    
+    # ===================== UI КОМПОНЕНТЫ =====================
 
     title = ft.Text("📸 Photo Analyzer", size=32, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
+    
     model_status = ft.Text("⏳ Загрузка модели...", size=14, color=ft.Colors.GREY)
-    gallery_grid = ft.GridView(expand=True, max_extent=150, spacing=10, run_spacing=10)
+    
+    status_text = ft.Text("Готов к работе", size=14, color=ft.Colors.GREY_500)
+    
     selected_info = ft.Text("Выбрано: 0 файлов", size=14, color=ft.Colors.GREY)
+    
     progress_container = ft.Column()
+    
+    gallery_grid = ft.GridView(
+        expand=True,
+        max_extent=150,
+        spacing=10,
+        run_spacing=10,
+    )
+
+    # ===================== ФУНКЦИИ =====================
 
     def show_snackbar(message: str, action: str = "OK"):
         page.snack_bar = ft.SnackBar(content=ft.Text(message), action=action)
@@ -79,6 +113,7 @@ def main(page: ft.Page):
                 analyzer = YOLOAnalyzer(model_path)
                 model_status.value = "✅ Модель загружена"
                 model_status.color = ft.Colors.GREEN
+                status_text.value = "Готов к анализу"
             else:
                 model_status.value = f"❌ Модель не найдена: {model_path}"
                 model_status.color = ft.Colors.RED
@@ -87,13 +122,49 @@ def main(page: ft.Page):
             model_status.color = ft.Colors.RED
         page.update()
 
-    # ===== ВЫБОР ФАЙЛОВ: ДЕСКТОП-РЕЖИМ (tkinter) =====
+    def find_gallery_async():
+        def search_thread():
+            try:
+                status_text.value = "⏳ Поиск фото..."
+                page.update()
+                
+                photos = scanner.find_photos()
+                
+                if not photos:
+                    status_text.value = "❌ Фото не найдены"
+                    page.update()
+                    show_snackbar("❌ Фото не найдены")
+                    return
+                
+                current_images.clear()
+                for photo in photos:
+                    if photo.get('path'):
+                        current_images.append(photo['path'])
+                
+                selected_info.value = f"Найдено: {len(current_images)} фото"
+                status_text.value = f"Готово: {len(current_images)} фото"
+                page.update()
+                
+                show_snackbar(f"Найдено {len(current_images)} фото")
+                
+            except Exception as e:
+                status_text.value = f"❌ Ошибка: {e}"
+                page.update()
+                show_snackbar(f"Ошибка: {e}")
+        
+        threading.Thread(target=search_thread, daemon=True).start()
+
+    def find_gallery(e):
+        find_gallery_async()
+
     def pick_files_desktop(e):
-        """Открывает диалог выбора файлов через tkinter"""
         try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
             root = tk.Tk()
-            root.withdraw()  # Скрываем главное окно
-            root.attributes('-topmost', True)  # Окно поверх всех
+            root.withdraw()
+            root.attributes('-topmost', True)
             
             files = filedialog.askopenfilenames(
                 title="Выберите фотографии",
@@ -106,49 +177,24 @@ def main(page: ft.Page):
                 for f in files:
                     current_images.append(f)
                 selected_info.value = f"Выбрано: {len(current_images)} файлов"
+                status_text.value = f"Готово: {len(current_images)} файлов"
                 page.update()
                 show_snackbar(f"Выбрано {len(current_images)} файлов")
             else:
                 show_snackbar("Выбор отменен")
         except Exception as e:
-            print(f"❌ Ошибка tkinter: {e}")
-            show_snackbar(f"Ошибка выбора файлов: {e}")
+            show_snackbar(f"Ошибка: {e}")
 
-    # ===== ВЕБ-РЕЖИМ: ВЫБОР ФАЙЛОВ ЧЕРЕЗ JAVASCRIPT =====
-    def pick_files_web(e):
-        js_code = """
-        var input = document.createElement('input');
-        input.type = 'file';
-        input.multiple = true;
-        input.accept = 'image/*';
-        input.onchange = function(e) {
-            var files = e.target.files;
-            var result = [];
-            for (var i = 0; i < files.length; i++) {
-                result.push(files[i].name);
-            }
-            var event = new CustomEvent('file-picked', { detail: result });
-            document.dispatchEvent(event);
-        };
-        input.click();
-        """
-        try:
-            page.window.evaluate_js(js_code)
-        except AttributeError:
-            show_snackbar("Веб-режим не поддерживается. Используйте десктоп-режим.")
-            print("⚠️ page.window.evaluate_js не доступен")
+    def pick_files(e):
+        pick_files_desktop(e)
 
-    def on_files_selected(data):
-        print(f"📁 Получены файлы: {data}")
-        if data and len(data) > 0:
-            show_snackbar(f"Выбрано файлов: {len(data)}")
-            selected_info.value = f"Выбрано: {len(data)} файлов"
-            page.update()
-        else:
-            show_snackbar("Выбор отменен")
-
-    # ===== АНАЛИЗ ИЗОБРАЖЕНИЙ =====
     def analyze_images():
+        global is_analyzing, analysis_complete
+        
+        if is_analyzing:
+            show_snackbar("⏳ Анализ уже выполняется!")
+            return
+        
         if not analyzer:
             show_snackbar("❌ Модель не загружена!")
             return
@@ -157,10 +203,20 @@ def main(page: ft.Page):
             show_snackbar("⚠️ Нет выбранных файлов!")
             return
 
+        # Сбрасываем предыдущие результаты
+        is_analyzing = True
+        analysis_complete = False
         analysis_results.clear()
         gallery_grid.controls.clear()
         progress_container.controls.clear()
+        
+        # Обновляем кнопки
+        analyze_btn.text = "⏳ Анализ..."
+        analyze_btn.disabled = True
+        show_results_btn.disabled = True
+        page.update()
 
+        # Создаем прогресс-бары
         progress_items = {}
         for path in current_images:
             filename = os.path.basename(path)
@@ -177,53 +233,105 @@ def main(page: ft.Page):
             }
 
         page.add(ft.Divider(height=10), progress_container)
+        status_text.value = f"⏳ Анализ: 0/{len(current_images)}"
         page.update()
 
+        # Запускаем задачи
         futures = []
         for path in current_images:
             future = executor.submit(analyze_single_image, path, analyzer)
             futures.append(future)
 
         def check_futures():
+            global is_analyzing, analysis_complete
             completed = 0
             total = len(futures)
+            
             for future in as_completed(futures):
                 completed += 1
-                result = future.result()
-                path = result['path']
+                try:
+                    result = future.result(timeout=60)
+                    path = result['path']
+                    
+                    if path in progress_items:
+                        items = progress_items[path]
+                        items['bar'].value = 1.0
+                        if result['success'] and result['detections']:
+                            items['status'].value = f"✅ {len(result['detections'])}"
+                        elif result['success']:
+                            items['status'].value = "⚠️ 0"
+                        else:
+                            items['status'].value = "❌"
+                        page.update()
+                    
+                    analysis_results[path] = {
+                        'tags': result['tags'],
+                        'detections': result['detections'],
+                        'filename': result['filename'],
+                        'success': result['success'],
+                        'error': result['error']
+                    }
+                    
+                except TimeoutError:
+                    print(f"⏰ Таймаут задачи {completed}/{total}")
+                    # Добавляем пустой результат
+                    path = f"unknown_{completed}"
+                    analysis_results[path] = {
+                        'tags': [],
+                        'detections': [],
+                        'filename': f"Задача {completed}",
+                        'success': False,
+                        'error': 'Timeout'
+                    }
+                    
+                except Exception as e:
+                    print(f"❌ Ошибка: {e}")
                 
-                if path in progress_items:
-                    items = progress_items[path]
-                    items['bar'].value = 1.0
-                    items['status'].value = "✅" if result['success'] else "❌"
-                    page.update()
-                
-                analysis_results[path] = {
-                    'tags': result['tags'],
-                    'detections': result['detections'],
-                    'filename': result['filename'],
-                    'success': result['success'],
-                    'error': result['error']
-                }
+                status_text.value = f"⏳ Анализ: {completed}/{total}"
+                page.update()
             
-            show_snackbar(f"✅ Анализ завершен! Обработано: {completed} из {total}")
+            # Анализ завершен
+            is_analyzing = False
+            analysis_complete = True
+            
+            total_detections = sum(len(r['detections']) for r in analysis_results.values())
+            status_text.value = f"✅ Анализ завершен! Найдено объектов: {total_detections}"
+            
+            analyze_btn.text = "🔍 Анализировать"
+            analyze_btn.disabled = False
+            show_results_btn.disabled = False
+            
+            show_snackbar(f"✅ Анализ завершен! Найдено объектов: {total_detections}")
+            
+            # Автоматически показываем результаты
             show_results()
 
         threading.Thread(target=check_futures, daemon=True).start()
 
     def show_results():
+        if not analysis_results:
+            show_snackbar("⚠️ Нет результатов для отображения")
+            return
+        
         gallery_grid.controls.clear()
+        
         for path, data in analysis_results.items():
             tags_str = format_tags(data['tags'])
             filename = data['filename'][:20] + "..." if len(data['filename']) > 20 else data['filename']
-            status_icon = "✅" if data['success'] else "❌"
+            
+            if data['success'] and data['detections']:
+                status_icon = f"✅ {len(data['detections'])}"
+            elif data['success']:
+                status_icon = "⚠️ 0"
+            else:
+                status_icon = "❌"
 
             card = ft.Container(
                 content=ft.Column([
                     ft.Icon(ft.Icons.IMAGE, size=40, color=ft.Colors.BLUE_400),
                     ft.Text(filename, size=12, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
                     ft.Text(f"🏷️ {tags_str}", size=11, color=ft.Colors.GREY_400, text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"🎯 {len(data['detections'])} объектов {status_icon}", size=11, color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER),
+                    ft.Text(f"🎯 {status_icon}", size=11, color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER),
                 ]),
                 padding=10,
                 bgcolor=ft.Colors.GREY_900,
@@ -231,18 +339,17 @@ def main(page: ft.Page):
                 width=150,
             )
             gallery_grid.controls.append(card)
+        
         page.update()
+        show_snackbar(f"✅ Отображено {len(analysis_results)} результатов")
 
     # ===================== КНОПКИ =====================
 
-    # Выбираем режим в зависимости от окружения
-    def pick_files(e):
-        if os.name == 'nt':  # Windows
-            pick_files_desktop(e)
-        elif sys.platform == 'linux':
-            pick_files_desktop(e)  # Используем tkinter
-        else:
-            pick_files_web(e)  # Fallback
+    search_btn = ft.Button(
+        "📂 Найти фото",
+        icon=ft.Icons.SEARCH,
+        on_click=find_gallery,
+    )
 
     pick_btn = ft.Button(
         "📁 Выбрать фото",
@@ -262,12 +369,22 @@ def main(page: ft.Page):
         on_click=lambda e: analyze_images(),
     )
 
+    show_results_btn = ft.Button(
+        "📊 Показать результаты",
+        icon=ft.Icons.LIST,
+        on_click=lambda e: show_results(),
+        disabled=True,
+    )
+
+    # ===================== СБОРКА ИНТЕРФЕЙСА =====================
+
     header = ft.Row([
+        search_btn,
         pick_btn,
         analyze_btn,
+        show_results_btn,
         load_btn,
-        selected_info,
-    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+    ], alignment=ft.MainAxisAlignment.START, wrap=True, spacing=10)
 
     page.add(
         title,
@@ -275,6 +392,9 @@ def main(page: ft.Page):
         model_status,
         ft.Divider(height=10),
         header,
+        ft.Divider(height=10),
+        selected_info,
+        status_text,
         ft.Divider(height=10),
         gallery_grid,
     )
