@@ -3,4 +3,4 @@ lancedb>=0.4.0
 Pillow>=10.0.0
 numpy>=1.24.0
 ultralytics
-ai-edge-litert-nightly  
+tflite-runtime
