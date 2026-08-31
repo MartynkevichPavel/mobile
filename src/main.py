@@ -8,11 +8,11 @@ import time
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-from config import MODEL_PATH
-from yolo_analyzer import YOLOAnalyzer
-from database import PhotoDatabase
-from utils import format_tags
-from gallery_scanner import GalleryScanner
+from src.config import MODEL_PATH
+from src.yolo_analyzer import YOLOAnalyzer
+from src.database import PhotoDatabase
+from src.utils import format_tags
+from src.gallery_scanner import GalleryScanner
 
 
 analysis_results = {}

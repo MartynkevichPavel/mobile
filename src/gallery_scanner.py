@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from typing import List, Dict, Optional
-
+from src.config import DB_PATH
 
 class GalleryScanner:
     """Класс для быстрого поиска изображений в галерее."""
@@ -9,7 +9,7 @@ class GalleryScanner:
     # Поддерживаемые расширения изображений
     IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
     
-    # Стандартные папки с изображениями
+    # Стандартные папки с изображениямиs
     PHOTO_DIRS = [
         'DCIM',           # Камера
         'Pictures',       # Картинки

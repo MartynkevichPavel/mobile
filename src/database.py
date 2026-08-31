@@ -1,5 +1,5 @@
 import lancedb
-from config import DB_PATH
+from src.config import DB_PATH
 
 
 class PhotoDatabase:

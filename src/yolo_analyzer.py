@@ -2,7 +2,7 @@ import os
 import numpy as np
 from PIL import Image
 import tflite_runtime.interpreter as tflite
-from config import CONF_THRESHOLD, INPUT_SIZE, COCO_CLASSES, IOU_THRESHOLD
+from src.config import CONF_THRESHOLD, INPUT_SIZE, COCO_CLASSES, IOU_THRESHOLD
 
 
 class YOLOAnalyzer:
@@ -15,17 +15,25 @@ class YOLOAnalyzer:
 
     def _load_model(self):
         try:
-            self.interpreter = tflite.Interpreter(model_path=self.model_path)
+            # Проверяем, что файл существует
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"Модель не найдена: {self.model_path}")
+        
+            # Загружаем модель с явными настройками для мобильных устройств
+            self.interpreter = tflite.Interpreter(
+                model_path=self.model_path,
+                num_threads=2  # Ограничиваем потоки для мобильных устройств
+            )
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
-            
+        
             print(f"✅ Модель загружена: {self.model_path}")
             print(f"   Вход: {self.input_details[0]['shape']}")
             print(f"   Входной тип: {self.input_details[0]['dtype']}")
             print(f"   Выход: {self.output_details[0]['shape']}")
             print(f"   Выходной тип: {self.output_details[0]['dtype']}")
-            
+        
         except Exception as e:
             print(f"❌ Ошибка загрузки модели: {e}")
             raise

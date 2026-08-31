@@ -1,0 +1,7 @@
+.venv
+photo_db
+assets
+txt
+.vscode
+n8n-compose/.env
+.env
